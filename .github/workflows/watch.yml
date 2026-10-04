@@ -1,0 +1,40 @@
+name: 52pojie watcher
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 min (GitHub may delay runs a few minutes)
+  workflow_dispatch:          # adds a manual "Run workflow" button for testing
+
+concurrency:
+  group: 52pojie-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: 52pojie-state-${{ github.run_id }}
+          restore-keys: 52pojie-state-
+
+      - name: Install requests
+        run: pip install -q requests
+
+      - name: Run check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python check_52pojie.py
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: 52pojie-state-${{ github.run_id }}
