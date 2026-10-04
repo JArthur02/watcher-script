@@ -64,7 +64,13 @@ def check_registration():
     try:
         r = requests.get(REG_URL, headers=HEADERS, timeout=30)
         r.raise_for_status()
+        r.encoding = 'gbk'
         html = r.text
+
+        if "吾爱破解" not in html:
+            print("WAF block or incomplete page loaded")
+            return "error"
+
         needs_code = ("invitecode" in html) or ("邀请码" in html)
         if "开放注册" in html:
             return "open"
@@ -73,6 +79,9 @@ def check_registration():
         if not needs_code:
             return "open"
         return "code"
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP error {e.response.status_code}: {str(e)[:120]}")
+        return "error"
     except requests.RequestException as e:
         print("network error:", str(e)[:120])
         return "error"
