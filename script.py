@@ -46,13 +46,17 @@ def load_state():
     try:
         with open(STATE_FILE) as f:
             return json.load(f).get("state")
+    except FileNotFoundError:
+        return None
     except Exception:
         return None
 
-
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump({"state": state, "updated": datetime.now(timezone.utc).isoformat()}, f)
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump({"state": state, "updated": datetime.now(timezone.utc).isoformat()}, f)
+    except Exception as e:
+        print("WARNING: failed to save state:", str(e)[:100])
 
 
 def check_registration():
