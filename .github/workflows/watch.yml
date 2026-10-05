@@ -20,7 +20,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: 52pojie-state
+          key: 52pojie-state-${{ github.run_id }}
           restore-keys: 52pojie-state-
 
       - name: Install requests
@@ -37,4 +37,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: 52pojie-state
+          key: 52pojie-state-${{ github.run_id }}
