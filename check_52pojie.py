@@ -131,17 +131,25 @@ def main():
         else:
             errors = 0
             error_alerted = False
-            if state == "open" and prev != "open" and not telegram_send(
-                    f"🔓 52pojie OPEN REGISTRATION is live!\nRegister now: {REG_URL}"):
+            alerted = False
+            open_alert_failed = False
+            if state == "open" and prev != "open":
+                alerted = telegram_send(f"🔓 52pojie OPEN REGISTRATION is live!\nRegister now: {REG_URL}")
+                open_alert_failed = not alerted
+
+            if open_alert_failed:
                 print("alert delivery failed - state not saved, will retry")
                 if POLL_DURATION == 0:
                     sys.exit(1)
             else:
                 if state != "open" and prev == "open":
-                    telegram_send("52pojie registration window appears to have closed.")
+                    alerted = telegram_send("52pojie registration window appears to have closed.")
 
                 if IS_MANUAL:
                     telegram_send(f"52pojie watcher check-in: state = {state}. Alerts are live.")
+                elif alerted:
+                    # A state-change alert already proves liveness; a "no change" heartbeat next to it would be wrong
+                    last_heartbeat = datetime.now(timezone.utc).isoformat()
                 elif heartbeat_due(last_heartbeat):
                     # Daily: silence then means "no change", not "broken"
                     if telegram_send(f"52pojie watcher heartbeat: state = {state}, no change. Still watching."):
