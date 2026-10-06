@@ -2,22 +2,36 @@ name: 52pojie watcher
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Backup only: scheduled runs are heavily throttled. Each run polls for ~5h40m and
+    # queues its own successor, which is what gives near-continuous coverage.
+    - cron: "7 * * * *"
   workflow_dispatch:
+    inputs:
+      loop:
+        description: "Poll continuously for ~5h40m and chain the next run (default: check once and send a check-in)"
+        type: boolean
+        default: false
 
+# One run at a time; a newer pending run replaces an older pending one.
 concurrency:
   group: 52pojie-watch
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write  # lets a finished run queue the next one
+
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350
+    env:
+      LOOP: ${{ github.event_name == 'schedule' || inputs.loop }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Restore state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: state.json
           key: 52pojie-state-${{ github.run_id }}
@@ -30,11 +44,21 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POLL_DURATION_SECONDS: ${{ (github.event_name == 'schedule' || inputs.loop) && '20400' || '0' }}
+          POLL_INTERVAL_SECONDS: "60"
         run: python check_52pojie.py
 
       - name: Save state
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: state.json
           key: 52pojie-state-${{ github.run_id }}
+
+      # Queue the next run; it waits in the concurrency group until this one ends.
+      # Only on success, so a crash can't spin into a rapid failure loop (the hourly cron restarts it).
+      - name: Queue next run
+        if: success() && env.LOOP == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run watch.yml --ref "$GITHUB_REF_NAME" -f loop=true
