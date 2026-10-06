@@ -9,10 +9,11 @@ import os
 import sys
 import json
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 REG_URL = "https://www.52pojie.cn/member.php?mod=register"
 STATE_FILE = "state.json"
+HEARTBEAT_EVERY = timedelta(hours=23)  # scheduled runs are sparse; 23h avoids drifting past a day
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -43,20 +44,30 @@ def telegram_send(text):
 
 
 def load_state():
+    """Returns the saved state dict ({} if missing or unreadable)."""
     try:
         with open(STATE_FILE) as f:
-            return json.load(f).get("state")
-    except FileNotFoundError:
-        return None
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return None
+        return {}
 
-def save_state(state):
+def save_state(state, last_heartbeat=None):
     try:
         with open(STATE_FILE, "w") as f:
-            json.dump({"state": state, "updated": datetime.now(timezone.utc).isoformat()}, f)
+            json.dump({"state": state,
+                       "updated": datetime.now(timezone.utc).isoformat(),
+                       "last_heartbeat": last_heartbeat}, f)
     except Exception as e:
         print("WARNING: failed to save state:", str(e)[:100])
+
+
+def heartbeat_due(last_heartbeat):
+    try:
+        last = datetime.fromisoformat(last_heartbeat)
+    except (TypeError, ValueError):
+        return True
+    return datetime.now(timezone.utc) - last >= HEARTBEAT_EVERY
 
 
 def check_registration():
@@ -89,7 +100,9 @@ def check_registration():
 
 def main():
     open(STATE_FILE, "a").close()  # ensure file exists for the cache save step
-    prev = load_state()
+    saved = load_state()
+    prev = saved.get("state")
+    last_heartbeat = saved.get("last_heartbeat")
     state = check_registration()
     print(f"previous state: {prev!r} | current state: {state!r}")
 
@@ -109,7 +122,12 @@ def main():
     if EVENT == "workflow_dispatch":
         telegram_send(f"52pojie watcher check-in: state = {state}. Alerts are live.")
 
-    save_state(state)
+    # Daily heartbeat on scheduled runs: silence then means "no change", not "broken"
+    if EVENT == "schedule" and heartbeat_due(last_heartbeat):
+        if telegram_send(f"52pojie watcher heartbeat: state = {state}, no change. Still watching."):
+            last_heartbeat = datetime.now(timezone.utc).isoformat()
+
+    save_state(state, last_heartbeat)
     print("done")
 
 
