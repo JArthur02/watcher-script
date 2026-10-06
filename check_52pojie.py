@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 52pojie.cn open-registration watcher - GitHub Actions edition.
-Checks once per run, alerts via Telegram on change to 'open',
-persists state in state.json (cached between runs by the workflow).
+Alerts via Telegram on change to 'open'. With POLL_DURATION_SECONDS set it
+polls every POLL_INTERVAL_SECONDS for that long (the workflow chains runs
+back to back for near-continuous coverage); otherwise it checks once.
+Persists state in state.json (cached between runs by the workflow).
 """
 
 import os
 import sys
 import json
+import time
 import requests
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +21,11 @@ HEARTBEAT_EVERY = timedelta(hours=23)  # scheduled runs are sparse; 23h avoids d
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
+POLL_DURATION = int(os.environ.get("POLL_DURATION_SECONDS") or 0)
+POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS") or 60)
+ERROR_ALERT_AFTER = 30  # consecutive failed checks before warning that the watcher is blind
+# A manual "Run workflow" click checks once and sends a check-in; looping runs send heartbeats
+IS_MANUAL = EVENT == "workflow_dispatch" and POLL_DURATION == 0
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -103,31 +111,49 @@ def main():
     saved = load_state()
     prev = saved.get("state")
     last_heartbeat = saved.get("last_heartbeat")
-    state = check_registration()
-    print(f"previous state: {prev!r} | current state: {state!r}")
+    deadline = time.monotonic() + POLL_DURATION
+    errors = 0
+    error_alerted = False
 
-    if state == "error":
-        print("::error::registration check failed - see log above")
-        sys.exit(1)  # red X in Actions; old state is kept, next run retries
+    while True:
+        state = check_registration()
+        print(f"previous state: {prev!r} | current state: {state!r}")
 
-    if state == "open" and prev != "open":
-        if not telegram_send(f"🔓 52pojie OPEN REGISTRATION is live!\nRegister now: {REG_URL}"):
-            print("alert delivery failed - state not saved, will retry next run")
-            sys.exit(1)
+        if state == "error":
+            errors += 1
+            if POLL_DURATION == 0:
+                print("::error::registration check failed - see log above")
+                sys.exit(1)  # red X in Actions; old state is kept, next run retries
+            if errors >= ERROR_ALERT_AFTER and not error_alerted:
+                error_alerted = telegram_send(
+                    f"52pojie watcher: {errors} checks in a row failed (site blocking or down?). "
+                    "Open windows can't be detected until this recovers.")
+        else:
+            errors = 0
+            error_alerted = False
+            if state == "open" and prev != "open" and not telegram_send(
+                    f"🔓 52pojie OPEN REGISTRATION is live!\nRegister now: {REG_URL}"):
+                print("alert delivery failed - state not saved, will retry")
+                if POLL_DURATION == 0:
+                    sys.exit(1)
+            else:
+                if state != "open" and prev == "open":
+                    telegram_send("52pojie registration window appears to have closed.")
 
-    if state != "open" and prev == "open":
-        telegram_send("52pojie registration window appears to have closed.")
+                if IS_MANUAL:
+                    telegram_send(f"52pojie watcher check-in: state = {state}. Alerts are live.")
+                elif heartbeat_due(last_heartbeat):
+                    # Daily: silence then means "no change", not "broken"
+                    if telegram_send(f"52pojie watcher heartbeat: state = {state}, no change. Still watching."):
+                        last_heartbeat = datetime.now(timezone.utc).isoformat()
 
-    # Manual runs (Run workflow button) send a check-in so you can verify alerts
-    if EVENT == "workflow_dispatch":
-        telegram_send(f"52pojie watcher check-in: state = {state}. Alerts are live.")
+                prev = state
+                save_state(prev, last_heartbeat)
 
-    # Daily heartbeat on scheduled runs: silence then means "no change", not "broken"
-    if EVENT == "schedule" and heartbeat_due(last_heartbeat):
-        if telegram_send(f"52pojie watcher heartbeat: state = {state}, no change. Still watching."):
-            last_heartbeat = datetime.now(timezone.utc).isoformat()
+        if time.monotonic() + POLL_INTERVAL >= deadline:
+            break
+        time.sleep(POLL_INTERVAL)
 
-    save_state(state, last_heartbeat)
     print("done")
 
 
