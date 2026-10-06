@@ -28,10 +28,10 @@ jobs:
     env:
       LOOP: ${{ github.event_name == 'schedule' || inputs.loop }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Restore state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: state.json
           key: 52pojie-state-${{ github.run_id }}
@@ -50,7 +50,7 @@ jobs:
 
       - name: Save state
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: state.json
           key: 52pojie-state-${{ github.run_id }}
