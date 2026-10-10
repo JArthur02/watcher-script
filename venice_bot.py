@@ -9,7 +9,9 @@ ALLOWED_TELEGRAM_USER_IDS are served; everyone else is ignored silently.
 The repo is public, so Actions logs are public too: message text and model
 replies are never printed. Conversation history lives in memory only.
 
-Commands: /models [word]  /model [n|id]  /reset  /help
+Commands: /models  /model [n|id]  /reset  /help
+
+Only the models in MODELS below can be chosen; /models lists exactly those.
 
 Env:
   VENICE_BOT_TOKEN           Telegram bot token from @BotFather (required)
@@ -17,7 +19,7 @@ Env:
   ALLOWED_TELEGRAM_USER_IDS  comma-separated numeric user IDs. If empty, the bot
                              only replies with the sender's ID (setup mode) and
                              never calls Venice.
-  VENICE_DEFAULT_MODEL       optional model id used until you pick one with /model
+  VENICE_DEFAULT_MODEL       optional model id (must be one of MODELS) used until you pick one
   POLL_DURATION_SECONDS      run this long then exit (the workflow chains runs);
                              0 = run until killed
   MAX_HISTORY_MESSAGES       messages of context kept per chat (default 20)
@@ -44,11 +46,19 @@ VENICE_BASE = os.environ.get("VENICE_BASE_URL", "https://api.venice.ai/api/v1").
 
 LONG_POLL_SECONDS = 50
 VENICE_TIMEOUT = 180
-MODELS_TTL = 600
 TG_MAX_CHARS = 4000  # Telegram's limit is 4096
 
 history = {}       # chat_id -> [{"role", "content"}]
-_models_cache = {"at": 0.0, "items": []}
+
+# The only models the bot offers: (Venice model id, label). Order = the numbers shown by /models.
+MODELS = [
+    ("venice-uncensored-1-2", "Venice Uncensored 1.2"),
+    ("venice-uncensored-role-play", "Venice Role Play Uncensored"),
+    ("olafangensan-glm-4.7-flash-heretic", "GLM 4.7 Flash Heretic"),
+    ("e2ee-gemma-4-26b-a4b-uncensored-p", "Gemma 4 26B A4B Uncensored (E2EE)"),
+    ("qwen-3-8-27b", "Qwen 3.8 27B"),
+]
+MODEL_IDS = [mid for mid, _ in MODELS]
 
 
 class TelegramError(Exception):
@@ -159,24 +169,6 @@ def venice_error_text(r):
         (f": {str(msg)[:200]}" if msg else "")
 
 
-def list_models(force=False):
-    """[(id, display name)] of Venice text models; cached briefly."""
-    if not force and _models_cache["items"] and time.monotonic() - _models_cache["at"] < MODELS_TTL:
-        return _models_cache["items"]
-    r = requests.get(f"{VENICE_BASE}/models", params={"type": "text"}, headers=venice_headers(), timeout=30)
-    if r.status_code != 200:
-        raise RuntimeError(venice_error_text(r))
-    items = []
-    for m in r.json().get("data", []):
-        if not isinstance(m, dict) or not m.get("id"):
-            continue
-        name = (m.get("model_spec") or {}).get("name") or ""
-        items.append((m["id"], name))
-    items.sort(key=lambda x: x[0])
-    _models_cache.update(at=time.monotonic(), items=items)
-    return items
-
-
 def venice_chat(model, messages):
     r = requests.post(f"{VENICE_BASE}/chat/completions", headers=venice_headers(),
                       json={"model": model, "messages": messages}, timeout=VENICE_TIMEOUT)
@@ -190,7 +182,7 @@ def venice_chat(model, messages):
 # --- message handling -------------------------------------------------------
 
 HELP = ("Venice bot. Just send a message to chat with the selected model.\n\n"
-        "/models [word] - list text models (optionally filtered, e.g. /models claude)\n"
+        "/models - list the models you can choose from\n"
         "/model - show the current model\n"
         "/model <number|id> - switch model (number from /models)\n"
         "/reset - clear this conversation\n\n"
@@ -198,28 +190,18 @@ HELP = ("Venice bot. Just send a message to chat with the selected model.\n\n"
 
 
 def current_model(state):
-    return state.get("model") or DEFAULT_MODEL
+    """The chosen model if it is still one of MODELS, else the default if valid, else none."""
+    for m in (state.get("model"), DEFAULT_MODEL):
+        if m in MODEL_IDS:
+            return m
+    return ""
 
 
-def cmd_models(chat_id, state, query=""):
-    try:
-        items = list_models(force=True)
-    except Exception as e:
-        send(chat_id, f"Couldn't list models: {e}")
-        return
-    if not items:
-        send(chat_id, "Venice returned no text models.")
-        return
+def cmd_models(chat_id, state):
     cur = current_model(state)
-    q = query.lower()
-    # Numbers always refer to the full list, so /model <number> works after filtering too
-    lines = [f"{i}. {mid}" + (f" - {name}" if name and name != mid else "") + (" (current)" if mid == cur else "")
-             for i, (mid, name) in enumerate(items, 1) if not q or q in mid.lower() or q in name.lower()]
-    if not lines:
-        send(chat_id, f"No models match '{query}'. Send /models for the full list.")
-        return
-    head = f"Text models matching '{query}':" if q else "Text models (filter with /models <word>):"
-    send(chat_id, head + "\n" + "\n".join(lines) + "\n\nSwitch with /model <number or id>")
+    lines = [f"{i}. {label} ({mid})" + (" - current" if mid == cur else "")
+             for i, (mid, label) in enumerate(MODELS, 1)]
+    send(chat_id, "Models:\n" + "\n".join(lines) + "\n\nSwitch with /model <number>")
 
 
 def cmd_model(chat_id, arg, state):
@@ -227,22 +209,13 @@ def cmd_model(chat_id, arg, state):
         cur = current_model(state)
         send(chat_id, f"Current model: {cur}" if cur else "No model selected. Send /models, then /model <number>.")
         return
-    try:
-        items = list_models()
-    except Exception:
-        items = []  # can't validate; accept the id as typed
-    ids = [mid for mid, _ in items]
-    if arg.isdigit():
-        n = int(arg)
-        if not 1 <= n <= len(ids):
-            send(chat_id, "No model with that number. Send /models to see the list.")
-            return
-        choice = ids[n - 1]
-    elif ids and arg not in ids:
-        send(chat_id, "Unknown model id. Send /models to see the list.")
-        return
+    if arg.isdigit() and 1 <= int(arg) <= len(MODELS):
+        choice = MODEL_IDS[int(arg) - 1]
+    elif arg.lower() in MODEL_IDS:
+        choice = arg.lower()
     else:
-        choice = arg
+        send(chat_id, "That's not one of the models. Send /models to see them.")
+        return
     state["model"] = choice
     save_state(state)
     history.pop(chat_id, None)  # a fresh context for the new model
@@ -300,7 +273,7 @@ def handle(msg, state):
             cur = current_model(state)
             send(chat_id, HELP + (f"\n\nCurrent model: {cur}" if cur else "\n\nNo model selected yet. Send /models."))
         elif cmd == "/models":
-            cmd_models(chat_id, state, arg)
+            cmd_models(chat_id, state)
         elif cmd == "/model":
             cmd_model(chat_id, arg, state)
         elif cmd == "/reset":
