@@ -9,7 +9,7 @@ ALLOWED_TELEGRAM_USER_IDS are served; everyone else is ignored silently.
 The repo is public, so Actions logs are public too: message text and model
 replies are never printed. Conversation history lives in memory only.
 
-Commands: /models  /model [n|id]  /reset  /help
+Commands: /models [word]  /model [n|id]  /reset  /help
 
 Env:
   VENICE_BOT_TOKEN           Telegram bot token from @BotFather (required)
@@ -190,7 +190,7 @@ def venice_chat(model, messages):
 # --- message handling -------------------------------------------------------
 
 HELP = ("Venice bot. Just send a message to chat with the selected model.\n\n"
-        "/models - list available text models\n"
+        "/models [word] - list text models (optionally filtered, e.g. /models claude)\n"
         "/model - show the current model\n"
         "/model <number|id> - switch model (number from /models)\n"
         "/reset - clear this conversation\n\n"
@@ -201,7 +201,7 @@ def current_model(state):
     return state.get("model") or DEFAULT_MODEL
 
 
-def cmd_models(chat_id, state):
+def cmd_models(chat_id, state, query=""):
     try:
         items = list_models(force=True)
     except Exception as e:
@@ -211,9 +211,15 @@ def cmd_models(chat_id, state):
         send(chat_id, "Venice returned no text models.")
         return
     cur = current_model(state)
+    q = query.lower()
+    # Numbers always refer to the full list, so /model <number> works after filtering too
     lines = [f"{i}. {mid}" + (f" - {name}" if name and name != mid else "") + (" (current)" if mid == cur else "")
-             for i, (mid, name) in enumerate(items, 1)]
-    send(chat_id, "Text models:\n" + "\n".join(lines) + "\n\nSwitch with /model <number or id>")
+             for i, (mid, name) in enumerate(items, 1) if not q or q in mid.lower() or q in name.lower()]
+    if not lines:
+        send(chat_id, f"No models match '{query}'. Send /models for the full list.")
+        return
+    head = f"Text models matching '{query}':" if q else "Text models (filter with /models <word>):"
+    send(chat_id, head + "\n" + "\n".join(lines) + "\n\nSwitch with /model <number or id>")
 
 
 def cmd_model(chat_id, arg, state):
@@ -294,7 +300,7 @@ def handle(msg, state):
             cur = current_model(state)
             send(chat_id, HELP + (f"\n\nCurrent model: {cur}" if cur else "\n\nNo model selected yet. Send /models."))
         elif cmd == "/models":
-            cmd_models(chat_id, state)
+            cmd_models(chat_id, state, arg)
         elif cmd == "/model":
             cmd_model(chat_id, arg, state)
         elif cmd == "/reset":

@@ -26,7 +26,7 @@ the few seconds between runs are delivered when the next run starts.
 | Command | What it does |
 | --- | --- |
 | *(any text)* | Chat with the current model |
-| `/models` | List Venice text models |
+| `/models [word]` | List Venice text models; add a word to filter (e.g. `/models claude`) |
 | `/model` | Show the current model |
 | `/model <number\|id>` | Switch model (clears the conversation) |
 | `/reset` | Clear the conversation |
