@@ -1,0 +1,60 @@
+name: Venice Telegram bot
+
+on:
+  schedule:
+    # Backup only: each run polls for ~5h40m and queues its own successor. The cron
+    # restarts the chain if it ever breaks (it is throttled by GitHub, so keep it sparse).
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+# One bot instance at a time (two pollers on one token make Telegram return 409).
+# A newer pending run replaces an older pending one.
+concurrency:
+  group: venice-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write  # lets a finished run queue the next one
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+
+      # Only the chosen model id is cached - never message content.
+      - name: Restore state
+        uses: actions/cache/restore@v5
+        with:
+          path: venice_state.json
+          key: venice-state-${{ github.run_id }}
+          restore-keys: venice-state-
+
+      - name: Install requests
+        run: pip install -q requests
+
+      - name: Run bot
+        env:
+          VENICE_BOT_TOKEN: ${{ secrets.VENICE_BOT_TOKEN }}
+          VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+          ALLOWED_TELEGRAM_USER_IDS: ${{ secrets.ALLOWED_TELEGRAM_USER_IDS }}
+          VENICE_DEFAULT_MODEL: ${{ vars.VENICE_DEFAULT_MODEL }}
+          POLL_DURATION_SECONDS: "20400"
+        run: python venice_bot.py
+
+      - name: Save state
+        if: always() && hashFiles('venice_state.json') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: venice_state.json
+          key: venice-state-${{ github.run_id }}
+
+      # Queue the next run; it waits in the concurrency group until this one ends.
+      # Only on success, so a crash (e.g. missing secrets) can't spin into a rapid failure loop.
+      - name: Queue next run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run venice-bot.yml --ref "$GITHUB_REF_NAME"
