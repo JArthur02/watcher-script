@@ -18,15 +18,28 @@ the few seconds between runs are delivered when the next run starts.
    replies to any message with the sender's user ID and never calls Venice. Message your bot, put that
    ID into the secret, then run the workflow again (the running instance only reads secrets at start;
    cancel it first so the new one starts straight away).
-5. **Pick a model.** Send `/models`, then `/model <number>`. Optionally set a repo *variable*
-   `VENICE_DEFAULT_MODEL` to use a model until you choose one.
+5. **Pick a model.** Send `/models`, then `/model <number>` (see *Models* below). Optionally set a
+   repo *variable* `VENICE_DEFAULT_MODEL` to one of those model ids to use it until you choose.
+
+## Models
+
+The bot only offers these five models (the `MODELS` list at the top of `venice_bot.py`; edit it to
+change them). `/models` shows exactly this list and nothing else is accepted.
+
+| # | Model id | Name |
+| --- | --- | --- |
+| 1 | `venice-uncensored-1-2` | Venice Uncensored 1.2 |
+| 2 | `venice-uncensored-role-play` | Venice Role Play Uncensored |
+| 3 | `olafangensan-glm-4.7-flash-heretic` | GLM 4.7 Flash Heretic |
+| 4 | `e2ee-gemma-4-26b-a4b-uncensored-p` | Gemma 4 26B A4B Uncensored (E2EE) |
+| 5 | `qwen-3-8-27b` | Qwen 3.8 27B |
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | *(any text)* | Chat with the current model |
-| `/models [word]` | List Venice text models; add a word to filter (e.g. `/models claude`) |
+| `/models` | List the five models |
 | `/model` | Show the current model |
 | `/model <number\|id>` | Switch model (clears the conversation) |
 | `/reset` | Clear the conversation |
